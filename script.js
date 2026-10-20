@@ -105,7 +105,8 @@
         if (motion) gsap.fromTo(svg, { scale: 0.92 }, { scale: 1, duration: 1, ease: 'elastic.out(1, .45)' });
         if (motion) stepFx(svg, e.target.getAttribute('data-step'));
       });
-    }, { rootMargin: '-45% 0px -45% 0px' });
+    // On phones the diagram covers the top ~half of the screen, so steps activate lower down
+    }, { rootMargin: window.matchMedia('(max-width: 760px)').matches ? '-75% 0px -20% 0px' : '-45% 0px -45% 0px' });
     steps.forEach(function (s) { stepIO.observe(s); });
 
     // Highlight the current section in the nav

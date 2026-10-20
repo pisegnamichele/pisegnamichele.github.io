@@ -215,8 +215,17 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--btn); outline-o
   .tile-wide .tile-text { order: 0; }
   .tile .art, .tile-feature .art, .tile-wide .art { aspect-ratio: 16 / 10; height: auto; }
   .print { grid-template-columns: 1fr; gap: 0; }
-  .print-visual { top: 56px; height: 42vh; z-index: 1; background: var(--dark-bg); padding-block: 12px; }
-  .print-steps li { min-height: 52vh; }
+  /* The diagram gets an explicit height: a % height on the grid item resolves to auto, so the SVG
+     grew to the full column width and spilled over the step text below the sticky box */
+  .print-visual { top: 56px; height: 40vh; z-index: 1; background: var(--dark-bg); padding-block: 16px; }
+  .print-svg { height: calc(40vh - 32px); width: auto; }
+  /* Text sits in the lower half of the screen, clear of the sticky diagram */
+  .print-steps li { min-height: 36vh; justify-content: flex-start; padding-top: 2vh; }
+  /* Short last step: the diagram un-sticks as soon as the text reaches it */
+  .print-steps li:last-child { min-height: 0; margin-bottom: -8rem; }
+  #stampa .container { padding-bottom: 8rem; }
+  .print-steps h3 { font-size: clamp(28px, 8vw, 36px); }
+  .print-steps p { font-size: 18px; max-width: none; }
   .sheet > div { grid-template-columns: 1fr; padding-block: 18px; }
 }
 @media (max-width: 420px) {
