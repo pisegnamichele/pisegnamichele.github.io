@@ -31,6 +31,222 @@
     } catch (e) { selectText(); }
   });
 
+  // Hero: one wave around the ring of flyers. A few slow sine waves with unrelated speeds are added
+  // together, so the shape never repeats and moves like water instead of turning evenly.
+  (function () {
+    var path = document.querySelector('.orbit-waves .ow');
+    if (!path) return;
+    var N = 240, R = 100, visible = true, running = false, t0 = performance.now();
+    function shape(t) {
+      var a1 = 4.2 + 1.8 * Math.sin(t * 0.31), a2 = 3 + 1.4 * Math.sin(t * 0.23 + 2), a3 = 2.4 + 1.2 * Math.sin(t * 0.17 + 4);
+      var d = '';
+      for (var i = 0; i <= N; i++) {
+        var th = (i / N) * Math.PI * 2;
+        var r = R + a1 * Math.sin(5 * th + t * 0.9)
+                  + a2 * Math.sin(8 * th - t * 1.27 + 1.7)
+                  + a3 * Math.sin(3 * th + t * 0.53 + 0.4)
+                  + 1.6 * Math.sin(11 * th + t * 1.9 + Math.sin(t * 0.4) * 2);
+        d += (i ? 'L' : 'M') + (100 + r * Math.cos(th)).toFixed(2) + ' ' + (100 + r * Math.sin(th)).toFixed(2);
+      }
+      path.setAttribute('d', d + 'Z');
+    }
+    shape(0);
+    if (reduce) return;
+    if ('IntersectionObserver' in window) {
+      new IntersectionObserver(function (e) { visible = e[0].isIntersecting; start(); })
+        .observe(path.closest('.stage-frame'));
+    }
+    function start() { if (visible && !running) { running = true; requestAnimationFrame(loop); } }
+    function loop(now) {
+      if (!visible) { running = false; return; }
+      shape((now - t0) / 1000);
+      requestAnimationFrame(loop);
+    }
+    start();
+  })();
+
+  // ---------- Hero: grab a flyer, throw it, it springs back to its place on the ring ----------
+  (function () {
+    var flyers = document.querySelectorAll('.orbit .hf');
+    if (!flyers.length || reduce) return;
+    flyers.forEach(function (el) {
+      var img = el.querySelector('img');
+      if (img) img.setAttribute('draggable', 'false');
+      // x, y: offset from the place on the ring; vx, vy: speed in px per frame
+      var x = 0, y = 0, vx = 0, vy = 0, rot = 0, sc = 1;
+      var dragging = false, raf = 0, last = null, hist = [];
+      var startX = 0, startY = 0, baseX = 0, baseY = 0, ratio = 1;
+
+      function apply() {
+        el.style.transform = 'translate(' + x.toFixed(2) + 'px,' + y.toFixed(2) + 'px) rotate(' + rot.toFixed(2) + 'deg) scale(' + sc.toFixed(3) + ')';
+      }
+      function settle() {
+        raf = 0;
+        if (dragging) return;
+        // spring towards home + friction: a far throw flies away, slows, then comes back with a small bounce
+        vx += -x * 0.018; vy += -y * 0.018;
+        vx *= 0.9; vy *= 0.9;
+        x += vx; y += vy;
+        rot += (Math.max(-12, Math.min(12, vx * 0.5)) - rot) * 0.15;
+        sc += (1 - sc) * 0.15;
+        apply();
+        if (Math.abs(x) + Math.abs(y) + Math.abs(vx) + Math.abs(vy) + Math.abs(rot) > 0.08) {
+          raf = requestAnimationFrame(settle);
+        } else {
+          x = y = vx = vy = rot = 0; sc = 1;
+          el.style.transform = ''; el.classList.remove('is-flying');
+        }
+      }
+      el.addEventListener('pointerdown', function (e) {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        el.setPointerCapture(e.pointerId);
+        dragging = true;
+        if (raf) { cancelAnimationFrame(raf); raf = 0; }
+        // the hero frame can be scaled: convert screen pixels to the flyer's own pixels
+        ratio = el.offsetWidth / el.getBoundingClientRect().width || 1;
+        startX = e.clientX; startY = e.clientY; baseX = x; baseY = y;
+        hist = [{ x: e.clientX, y: e.clientY, t: performance.now() }];
+        el.classList.add('is-grabbed', 'is-flying');
+      });
+      el.addEventListener('pointermove', function (e) {
+        if (!dragging) return;
+        var nx = baseX + (e.clientX - startX) * ratio, ny = baseY + (e.clientY - startY) * ratio;
+        hist.push({ x: e.clientX, y: e.clientY, t: performance.now() });
+        if (hist.length > 6) hist.shift();
+        rot += (Math.max(-12, Math.min(12, (nx - x) * 0.35)) - rot) * 0.25;
+        x = nx; y = ny; sc = 1.06;
+        apply();
+      });
+      function release(e) {
+        if (!dragging) return;
+        dragging = false;
+        el.classList.remove('is-grabbed');
+        // speed of the last few moves becomes the throw
+        var a = hist[0], b = hist[hist.length - 1], dt = Math.max(16, b.t - a.t);
+        vx = (b.x - a.x) / dt * 16.7 * ratio * 1.6;
+        vy = (b.y - a.y) / dt * 16.7 * ratio * 1.6;
+        if (!raf) raf = requestAnimationFrame(settle);
+      }
+      el.addEventListener('pointerup', release);
+      el.addEventListener('pointercancel', release);
+      el.addEventListener('lostpointercapture', release);
+    });
+  })();
+
+  // ---------- Motion graphics that do not need GSAP ----------
+  (function () {
+    var heads = document.querySelectorAll('.sec-head h2, .footer h2');
+    var stats = document.querySelectorAll('.stat');
+    if (!('IntersectionObserver' in window) || reduce) {
+      heads.forEach(function (h) { h.classList.add('drawn'); });
+      stats.forEach(function (s) { s.classList.add('counted'); });
+    } else {
+      // Titles: the light-blue stroke draws itself underneath
+      var drawIO = new IntersectionObserver(function (es) {
+        es.forEach(function (e) { if (e.isIntersecting) { e.target.classList.add('drawn'); drawIO.unobserve(e.target); } });
+      }, { rootMargin: '0px 0px -15% 0px' });
+      heads.forEach(function (h) { drawIO.observe(h); });
+
+      // Stats: ring fills while the number counts up
+      var countIO = new IntersectionObserver(function (es) {
+        es.forEach(function (e) {
+          if (!e.isIntersecting) return;
+          countIO.unobserve(e.target);
+          var box = e.target, n = box.querySelector('.stat-n'), end = parseInt(n.getAttribute('data-count'), 10);
+          var delay = Array.prototype.indexOf.call(stats, box) * 180;
+          setTimeout(function () {
+            box.classList.add('counted');
+            var t0 = performance.now(), dur = 1600;
+            (function step(now) {
+              var t = clamp((now - t0) / dur), e2 = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+              n.textContent = Math.round(e2 * end);
+              if (t < 1) requestAnimationFrame(step);
+            })(t0);
+          }, delay);
+        });
+      }, { rootMargin: '0px 0px -20% 0px' });
+      stats.forEach(function (s) { s.querySelector('.stat-n').textContent = '0'; countIO.observe(s); });
+    }
+
+    // Footer: the same kind of water-like wave as the hero, stretched across the page
+    var fpath = document.querySelector('.footer-wave path');
+    if (!fpath) return;
+    var fvis = false, frun = false, ft0 = performance.now();
+    function fshape(t) {
+      var d = '';
+      for (var i = 0; i <= 120; i++) {
+        var x = i * 10, u = x / 1200 * Math.PI * 2;
+        var y = 40 + (9 + 4 * Math.sin(t * 0.3)) * Math.sin(2 * u + t * 0.8)
+                   + (6 + 3 * Math.sin(t * 0.21 + 1)) * Math.sin(5 * u - t * 1.15 + 1.3)
+                   + 3 * Math.sin(9 * u + t * 1.7 + Math.sin(t * 0.5) * 2);
+        d += (i ? 'L' : 'M') + x + ' ' + y.toFixed(2);
+      }
+      fpath.setAttribute('d', d);
+    }
+    fshape(0);
+    if (reduce || !('IntersectionObserver' in window)) return;
+    function floop(now) {
+      if (!fvis) { frun = false; return; }
+      fshape((now - ft0) / 1000);
+      requestAnimationFrame(floop);
+    }
+    new IntersectionObserver(function (es) {
+      fvis = es[0].isIntersecting;
+      if (fvis && !frun) { frun = true; requestAnimationFrame(floop); }
+    }).observe(fpath.closest('.footer'));
+  })();
+
+  // Lightbox: any image with data-full, the sport flyers, or a whole tile opens big
+  var lb = document.querySelector('.lightbox');
+  var lbImg = lb ? lb.querySelector('img') : null;
+  function openLightbox(img) {
+    if (!lb || !img) return;
+    lbImg.src = img.currentSrc || img.src;
+    lbImg.alt = img.alt;
+    if (typeof lb.showModal === 'function') lb.showModal();
+    else window.open(img.src, '_blank');
+    if (window.__lenis) window.__lenis.stop();
+  }
+  if (lb) {
+    lb.addEventListener('click', function (e) { if (e.target !== lbImg) lb.close(); });
+    lb.addEventListener('close', function () { if (window.__lenis) window.__lenis.start(); });
+  }
+  document.querySelectorAll('.tile').forEach(function (tile) {
+    var img = tile.querySelector('img[data-full]');
+    if (!img) return;
+    // The front flyer (last in the stack) is the one that opens
+    var all = tile.querySelectorAll('img[data-full]');
+    tile.querySelector('.art').addEventListener('click', function (e) {
+      var hit = e.target.closest('img[data-full]');
+      openLightbox(hit || all[all.length - 1]);
+    });
+  });
+  document.querySelectorAll('.sport-img').forEach(function (b) {
+    b.addEventListener('click', function () { openLightbox(b.querySelector('img')); });
+  });
+
+  // Sport cards: switch between the "presentazione" and "programma" flyer
+  document.querySelectorAll('.sport .seg').forEach(function (seg) {
+    var img = seg.closest('.sport-media').querySelector('.sport-img img');
+    seg.querySelectorAll('button').forEach(function (b) {
+      b.addEventListener('click', function () {
+        if (b.getAttribute('aria-pressed') === 'true') return;
+        seg.querySelectorAll('button').forEach(function (o) { o.setAttribute('aria-pressed', String(o === b)); });
+        var next = new Image();
+        next.onload = next.onerror = function () {
+          img.classList.add('swap');
+          setTimeout(function () {
+            img.src = b.getAttribute('data-src');
+            img.alt = b.getAttribute('data-alt');
+            img.classList.remove('swap');
+          }, reduce ? 0 : 200);
+        };
+        next.src = b.getAttribute('data-src');
+      });
+    });
+  });
+
   // Split paragraphs into words that light up while scrolling
   var wordGroups = [];
   document.querySelectorAll('[data-words]').forEach(function (el) {
@@ -103,10 +319,8 @@
         steps.forEach(function (s) { s.classList.toggle('active', s === e.target); });
         svg.setAttribute('data-step', e.target.getAttribute('data-step'));
         if (motion) gsap.fromTo(svg, { scale: 0.92 }, { scale: 1, duration: 1, ease: 'elastic.out(1, .45)' });
-        if (motion) stepFx(svg, e.target.getAttribute('data-step'));
       });
-    // On phones the diagram covers the top ~half of the screen, so steps activate lower down
-    }, { rootMargin: window.matchMedia('(max-width: 760px)').matches ? '-75% 0px -20% 0px' : '-45% 0px -45% 0px' });
+    }, { rootMargin: '-45% 0px -45% 0px' });
     steps.forEach(function (s) { stepIO.observe(s); });
 
     // Highlight the current section in the nav
@@ -121,7 +335,7 @@
         });
       });
     }, { rootMargin: '-50% 0px -50% 0px' });
-    ['home', 'lavori', 'stampa', 'esperienza', 'stage'].forEach(function (id) {
+    ['home', 'lavori', 'sport', 'stampa', 'esperienza', 'stage'].forEach(function (id) {
       var el = document.getElementById(id);
       if (el) navIO.observe(el);
     });
@@ -129,96 +343,168 @@
     document.querySelectorAll('.reveal').forEach(function (el) { el.classList.add('in'); });
   }
 
-  // Tiles open into a full view; the artwork flies from the tile to the centre and back
-  var lb = document.querySelector('.lightbox');
-  var lbArt = lb.querySelector('.lb-art');
-  var lbText = lb.querySelector('.lb-text');
-  var lbBackdrop = lb.querySelector('.lb-backdrop');
-  var lbClose = lb.querySelector('.lb-close');
-  var lbSource = null, lbOpener = null, lbBusy = false;
+  // ---------- Sport per tutti: the deck spreads into two rows, then each card opens ----------
+  (function () {
+    var section = document.querySelector('.sport-scroll');
+    if (!section) return;
+    var track = section.querySelector('.sports-track');
+    var grid = section.querySelector('.sports');
+    var cards = Array.prototype.slice.call(section.querySelectorAll('.sport'));
+    var mq = window.matchMedia('(min-width: 900px) and (min-height: 620px)');
+    var rots = [-9, 6, -4, 11];
+    var fanX = [-70, 60, -25, 95];
+    var fanY = [10, -20, 25, -5];
+    var flipY = [-28, 24, -18, 30];
+    var offsets = [];
+    var on = false;
+    var sparked = cards.map(function () { return false; });
+    var colors = ['#E5BF63', '#4C65B5', '#8669B7', '#F4E6BE', '#1E8FE0'];
 
-  // Offset and scale that place the lightbox art exactly over the tile art
-  function flipFrom(src) {
-    var s = src.getBoundingClientRect(), l = lbArt.getBoundingClientRect();
-    return {
-      x: s.left + s.width / 2 - (l.left + l.width / 2),
-      y: s.top + s.height / 2 - (l.top + l.height / 2),
-      scale: s.width / l.width
-    };
-  }
+    function ease(t) { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; }
+    function back(t) { var c = 1.4; return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2); }
 
-  function openTile(tile, opener) {
-    if (lbBusy || !lb.hidden) return;
-    var art = tile.querySelector('.art');
-    var svg = art.querySelector('svg').cloneNode(true);
-    svg.removeAttribute('style');
-    svg.setAttribute('data-anim', art.getAttribute('data-anim'));
-    // Start the copy at rest, whatever state the tile's hover gesture was in
-    svg.querySelectorAll('[class^="a-"]').forEach(function (g) { g.removeAttribute('style'); g.removeAttribute('transform'); });
-    lbArt.innerHTML = '';
-    lbArt.appendChild(svg);
-    lb.querySelector('.lb-kind').textContent = tile.querySelector('.tile-kind').textContent;
-    lb.querySelector('#lb-title').textContent = tile.querySelector('h3').textContent;
-    lb.querySelector('.lb-desc').textContent = tile.querySelector('.tile-text > p:last-child').textContent;
-
-    // Same aspect as the tile art, so the flight is a uniform scale with no stretching
-    var r = art.getBoundingClientRect();
-    var ar = r.width / r.height;
-    var w = Math.min(window.innerWidth - 32, 1000, (window.innerHeight - 220) * ar);
-    lbArt.style.width = w + 'px';
-    lbArt.style.height = w / ar + 'px';
-    lbText.style.width = w + 'px';
-
-    lbSource = art; lbOpener = opener;
-    lb.hidden = false;
-    root.classList.add('lb-open');
-    if (lenis) lenis.stop();
-    lbClose.focus({ preventScroll: true });
-
-    if (!motion) return;
-    lbBusy = true;
-    art.style.visibility = 'hidden';
-    gsap.set(lbArt, { clearProps: 'transform' });
-    gsap.fromTo(lbArt, flipFrom(art), {
-      x: 0, y: 0, scale: 1, duration: 0.6, ease: 'expo.out',
-      onComplete: function () { lbBusy = false; artTimeline(svg).play(); }
-    });
-    gsap.fromTo(lbBackdrop, { opacity: 0 }, { opacity: 1, duration: 0.4, ease: 'power2.out' });
-    gsap.fromTo([lbText, lbClose], { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.5, delay: 0.2, stagger: 0.06, ease: 'power3.out' });
-  }
-
-  function closeTile() {
-    if (lbBusy || lb.hidden) return;
-    function done() {
-      lb.hidden = true;
-      lbSource.style.visibility = '';
-      root.classList.remove('lb-open');
-      if (lenis) lenis.start();
-      if (lbOpener) lbOpener.focus({ preventScroll: true });
-      lbBusy = false;
+    function measure() {
+      // Layout positions without transforms: where each flyer must travel from the middle
+      var gw = grid.clientWidth, gh = grid.clientHeight;
+      offsets = cards.map(function (c) {
+        var m = c.querySelector('.sport-img');
+        var mx = m.offsetLeft + m.offsetWidth / 2, my = m.offsetTop + m.offsetHeight / 2;
+        c.style.transformOrigin = mx + 'px ' + my + 'px';
+        var cx = c.offsetLeft - grid.offsetLeft + mx;
+        var cy = c.offsetTop - grid.offsetTop + my;
+        return { x: gw / 2 - cx, y: gh / 2 - cy };
+      });
     }
-    if (!motion) return done();
-    lbBusy = true;
-    gsap.to([lbText, lbClose], { opacity: 0, duration: 0.2, ease: 'power2.out' });
-    gsap.to(lbBackdrop, { opacity: 0, duration: 0.45, ease: 'power2.inOut' });
-    gsap.to(lbArt, Object.assign(flipFrom(lbSource), { duration: 0.5, ease: 'power3.inOut', onComplete: done }));
-  }
 
-  document.querySelectorAll('.tile').forEach(function (tile) {
-    var b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'tile-open';
-    b.setAttribute('aria-label', 'Apri ' + tile.querySelector('h3').textContent);
-    b.addEventListener('click', function () { openTile(tile, b); });
-    tile.appendChild(b);
-  });
-  lbClose.addEventListener('click', closeTile);
-  lbBackdrop.addEventListener('click', closeTile);
-  document.addEventListener('keydown', function (e) {
-    if (lb.hidden) return;
-    if (e.key === 'Escape') closeTile();
-    if (e.key === 'Tab') { e.preventDefault(); lbClose.focus(); }
-  });
+    // A burst of little shapes in the flyer colours, from the edge of the flyer that opens
+    function sparks(card) {
+      if (!card.animate) return;
+      var m = card.querySelector('.sport-img').getBoundingClientRect();
+      var ox = m.right, oy = m.top + m.height / 2;
+      for (var i = 0; i < 26; i++) {
+        var d = document.createElement('span');
+        d.className = 'spark';
+        var size = 5 + Math.random() * 9;
+        d.style.width = d.style.height = size + 'px';
+        d.style.background = colors[i % colors.length];
+        if (i % 3 === 0) d.style.borderRadius = '2px';
+        d.style.left = ox + 'px'; d.style.top = oy + 'px';
+        document.body.appendChild(d);
+        var ang = (Math.random() - 0.5) * Math.PI * 1.3;
+        var dist = 60 + Math.random() * 170;
+        var tx = Math.cos(ang) * dist, ty = Math.sin(ang) * dist;
+        d.animate([
+          { transform: 'translate(-50%,-50%) scale(0) rotate(0deg)', opacity: 1 },
+          { transform: 'translate(calc(-50% + ' + tx * 0.7 + 'px), calc(-50% + ' + ty * 0.7 + 'px)) scale(1.2) rotate(180deg)', opacity: 1, offset: 0.45 },
+          { transform: 'translate(calc(-50% + ' + tx + 'px), calc(-50% + ' + (ty + 50) + 'px)) scale(0) rotate(360deg)', opacity: 0 }
+        ], { duration: 900 + Math.random() * 500, easing: 'cubic-bezier(.2,.7,.3,1)' }).onfinish = d.remove.bind(d);
+      }
+    }
+
+    // One single continuous movement: the scroll only sets a target,
+    // the drawn position glides towards it every frame, so wheel steps never show
+    var target = 0, cur = 0, raf = 0;
+    function progress() {
+      var r = track.getBoundingClientRect();
+      var span = track.offsetHeight - (window.innerHeight - 48);
+      return clamp((48 - r.top) / Math.max(1, span));
+    }
+    function smoothstep(a, b, x) { var t = clamp((x - a) / (b - a)); return t * t * (3 - 2 * t); }
+
+    function draw(t) {
+      // spread and opening overlap: there is no pause between the two
+      var spread = smoothstep(0.05, 0.7, t);
+      var open = smoothstep(0.4, 0.95, t);
+      var deck = 1 - spread;
+      var k = 1 - back(spread);
+      section.style.setProperty('--halo', deck.toFixed(4));
+      cards.forEach(function (c, i) {
+        var o = offsets[i] || { x: 0, y: 0 };
+        var scale = 1 + 0.32 * deck;
+        var tx = o.x * k + fanX[i] * deck, ty = o.y * k + fanY[i] * deck;
+        var rot = rots[i] * 1.4 * deck;
+        var ry = Math.sin(Math.PI * spread) * flipY[i];
+        c.style.transform = 'perspective(1400px) translate3d(' + tx.toFixed(2) + 'px,' + ty.toFixed(2) + 'px,0) rotate(' + rot.toFixed(3) + 'deg) rotateY(' + ry.toFixed(3) + 'deg) scale(' + scale.toFixed(4) + ')';
+        c.style.zIndex = spread < 0.999 ? String(cards.length - i) : '';
+        c.style.setProperty('--spread', spread.toFixed(4));
+        c.style.setProperty('--open', open.toFixed(4));
+        c.classList.toggle('is-open', open > 0.6);
+        if (open > 0.35 && !sparked[i]) { sparked[i] = true; setTimeout(sparks.bind(null, c), i * 90); }
+        if (open < 0.05) sparked[i] = false;
+      });
+    }
+    function tick() {
+      raf = 0;
+      if (!on) return;
+      cur += (target - cur) * 0.085;
+      if (Math.abs(target - cur) < 0.0004) cur = target;
+      draw(cur);
+      if (cur !== target) raf = requestAnimationFrame(tick);
+    }
+    function render(jump) {
+      if (!on) return;
+      target = progress();
+      if (jump === true) { cur = target; draw(cur); return; }
+      if (!raf) raf = requestAnimationFrame(tick);
+    }
+
+    function setup() {
+      var want = mq.matches && !reduce;
+      if (want === on) { if (on) { measure(); render(true); } return; }
+      on = want;
+      section.classList.toggle('sport-pinned', on);
+      cards.forEach(function (c) {
+        if (on) { c.classList.add('in'); return; }
+        c.style.transform = ''; c.style.zIndex = ''; c.style.transformOrigin = ''; c.style.removeProperty('--open'); c.style.removeProperty('--spread'); c.classList.remove('is-open');
+      });
+      if (on) { measure(); render(true); }
+      if (window.ScrollTrigger) ScrollTrigger.refresh();
+    }
+
+    // Phone: no room for the pinned deck, so each card opens on its own as it scrolls into view,
+    // with the same effects (tilted flyer that straightens, panel, bar, text, title shine, sparks)
+    var mob = false, mraf = 0, mrots = [-8, 7, -5, 9];
+    var mobileSparked = cards.map(function () { return false; });
+    function mobileDraw() {
+      mraf = 0;
+      if (!mob) return;
+      var vh = window.innerHeight;
+      cards.forEach(function (c, i) {
+        var r = c.getBoundingClientRect();
+        var q = clamp((vh * 0.98 - r.top) / (vh * 0.7));
+        var spread = smoothstep(0, 0.6, q), open = smoothstep(0.35, 1, q), k = 1 - spread;
+        var img = c.querySelector('.sport-img');
+        img.style.transform = 'translate3d(0,' + (50 * k).toFixed(1) + 'px,0) rotate(' + (mrots[i] * k).toFixed(2) + 'deg) scale(' + (0.82 + 0.18 * spread).toFixed(3) + ')';
+        c.style.setProperty('--spread', spread.toFixed(3));
+        c.style.setProperty('--open', open.toFixed(3));
+        if (open > 0.5 && !mobileSparked[i]) { mobileSparked[i] = true; sparks(c); }
+        if (open < 0.05) mobileSparked[i] = false;
+      });
+    }
+    function mobileSetup() {
+      var want = !mq.matches && !reduce;
+      if (want === mob) return;
+      mob = want;
+      section.classList.toggle('sport-mobile-fx', mob);
+      cards.forEach(function (c) {
+        if (mob) { c.classList.add('in'); return; }
+        var img = c.querySelector('.sport-img');
+        img.style.transform = '';
+        if (!on) { c.style.removeProperty('--open'); c.style.removeProperty('--spread'); }
+      });
+      if (mob) mobileDraw();
+    }
+
+    setup();
+    mobileSetup();
+    window.addEventListener('scroll', function () { render(); if (mob && !mraf) mraf = requestAnimationFrame(mobileDraw); }, { passive: true });
+    window.addEventListener('resize', function () { setup(); mobileSetup(); if (mob) mobileDraw(); });
+    window.addEventListener('load', setup);
+    cards.forEach(function (c) {
+      var img = c.querySelector('.sport-img img');
+      if (img && !img.complete) img.addEventListener('load', function () { if (on) { measure(); render(); } });
+    });
+  })();
 
   if (!motion) return;
 
@@ -229,6 +515,7 @@
   var lenis = null;
   if (window.Lenis) {
     lenis = new Lenis({ lerp: 0.09, wheelMultiplier: 1 });
+    window.__lenis = lenis;
     lenis.on('scroll', ScrollTrigger.update);
     gsap.ticker.add(function (t) { lenis.raf(t * 1000); });
     gsap.ticker.lagSmoothing(0);
@@ -310,30 +597,6 @@
     }, 0.2)
     .from('.stage-frame', { y: 160, opacity: 0, duration: 1.4, ease: 'expo.out' }, 0.45);
 
-  // Letters hop when touched: the hovered one jumps highest, neighbours follow
-  function hop(c, amt, delay) {
-    gsap.killTweensOf(c, 'yPercent');
-    gsap.timeline({ delay: delay })
-      .to(c, { yPercent: -amt, duration: 0.22, ease: 'power2.out' })
-      .to(c, { yPercent: 0, duration: 0.7, ease: 'elastic.out(1, .4)' });
-  }
-  function introDone() { return intro.progress() === 1; }
-  if (fine) {
-    heroChars.forEach(function (c, i) {
-      c.addEventListener('mouseenter', function () {
-        if (!introDone()) return;
-        for (var d = -2; d <= 2; d++) {
-          var n = heroChars[i + d];
-          if (n) hop(n, 30 / (1 + Math.abs(d) * 1.4), Math.abs(d) * 0.04);
-        }
-      });
-    });
-  }
-  document.querySelector('.hero h1').addEventListener('click', function () {
-    if (!introDone()) return;
-    heroChars.forEach(function (c, i) { hop(c, 26, i * 0.03); });
-  });
-
   var count = { v: 0 };
   var load = gsap.timeline({
     onComplete: function () {
@@ -390,8 +653,8 @@
       scrollTrigger: { trigger: frame, start: 'top bottom', end: 'bottom top', scrub: true }
     });
   });
-  gsap.to(frame.querySelector('.spin'), { rotation: 360, svgOrigin: '830 250', duration: 24, repeat: -1, ease: 'none' });
-  gsap.to(frame.querySelector('.spin-slow'), { rotation: -360, svgOrigin: '700 430', duration: 30, repeat: -1, ease: 'none' });
+  if (frame.querySelector('.spin')) gsap.to(frame.querySelector('.spin'), { rotation: 360, svgOrigin: '830 250', duration: 24, repeat: -1, ease: 'none' });
+  if (frame.querySelector('.spin-slow')) gsap.to(frame.querySelector('.spin-slow'), { rotation: -360, svgOrigin: '700 430', duration: 30, repeat: -1, ease: 'none' });
 
   // ---------- Mouse: parallax shapes, frame tilt, cursor, magnetic ----------
   if (fine) {
@@ -445,11 +708,13 @@
     window.addEventListener('mousedown', function () { cursor.classList.add('is-down'); });
     window.addEventListener('mouseup', function () { cursor.classList.remove('is-down'); });
     document.addEventListener('mouseover', function (e) {
-      var tile = e.target.closest('.tile');
-      var link = e.target.closest('a, button:not(.tile-open)');
+      if (e.target.closest('.lightbox')) { cursor.classList.add('is-hidden'); return; }
+      var tile = e.target.closest('.tile, .sport-img');
+      var link = e.target.closest('a, button:not(.sport-img)');
+      var zoom = tile && (tile.classList.contains('sport-img') || e.target.closest('.art-flyers, .art-photo'));
       cursor.classList.toggle('is-view', !!tile && !link);
       cursor.classList.toggle('is-link', !!link);
-      label.textContent = tile && !link ? 'Guarda' : '';
+      label.textContent = tile && !link ? (zoom ? 'Apri' : 'Guarda') : '';
     });
 
     // Magnetic buttons
@@ -509,7 +774,28 @@
       stagger: 0.025, ease: 'expo.out',
       scrollTrigger: { trigger: el, start: 'top 88%' }
     });
+    liftOnHover(chars);
   });
+  liftOnHover(heroChars);
+
+  // Letters lift a little under the pointer; the neighbours follow, softer
+  function liftOnHover(chars) {
+    if (!fine) return;
+    var setters = chars.map(function (c) { return gsap.quickTo(c, 'y', { duration: 0.45, ease: 'power3' }); });
+    chars.forEach(function (c, i) {
+      c.addEventListener('mouseenter', function () {
+        var h = c.offsetHeight || 40;
+        setters.forEach(function (set, j) {
+          var d = Math.abs(i - j);
+          set(d === 0 ? -h * 0.14 : d === 1 ? -h * 0.06 : d === 2 ? -h * 0.02 : 0);
+        });
+      });
+    });
+    var host = chars.length ? chars[0].closest('[data-split]') : null;
+    if (host) host.addEventListener('mouseleave', function () {
+      setters.forEach(function (set) { set(0); });
+    });
+  }
   gsap.utils.toArray('.sec-head p').forEach(function (p) {
     gsap.from(p, { y: 30, opacity: 0, duration: 1, ease: 'power3.out', scrollTrigger: { trigger: p, start: 'top 90%' } });
   });
@@ -535,7 +821,7 @@
   });
 
   tiles.forEach(function (tile) {
-    var art = tile.querySelector('.art svg');
+    var art = tile.querySelector('.art svg, .art .art-stage');
     if (art) {
       // Scaled up so the drift never uncovers the edges of the frame
       gsap.fromTo(art, { yPercent: -5, scale: 1.14 }, {
@@ -560,21 +846,6 @@
     tile.addEventListener('mouseleave', function () { trx(0); try_(0); });
   });
 
-  // Each artwork has its own little gesture: on hover with a mouse, once on scroll with touch
-  tiles.forEach(function (tile) {
-    var svg = tile.querySelector('.art svg');
-    var tl = artTimeline(svg);
-    if (fine) {
-      tile.addEventListener('mouseenter', function () { tl.play(); });
-      tile.addEventListener('mouseleave', function () { tl.reverse(); });
-    } else {
-      ScrollTrigger.create({
-        trigger: tile, start: 'top 55%', once: true,
-        onEnter: function () { tl.play(); gsap.delayedCall(1.6, function () { tl.reverse(); }); }
-      });
-    }
-  });
-
   // ---------- Print band: the black card expands to full bleed ----------
   gsap.fromTo(dark, { clipPath: 'inset(0% 5% 0% 5% round 48px)' }, {
     clipPath: 'inset(0% 0% 0% 0% round 0px)', ease: 'none',
@@ -590,8 +861,8 @@
   });
 
   // ---------- Experience: ghost word slides across ----------
-  gsap.fromTo('.ghost', { xPercent: 10, backgroundPosition: '100% 0' }, {
-    xPercent: -55, backgroundPosition: '0% 0', ease: 'none',
+  gsap.fromTo('.ghost', { xPercent: 10 }, {
+    xPercent: -55, ease: 'none',
     scrollTrigger: { trigger: '.band-exp', start: 'top bottom', end: 'bottom top', scrub: true }
   });
   gsap.from('.eyebrow-title', {
@@ -605,13 +876,6 @@
     scrollTrigger: { trigger: '.sheet', start: 'top 80%' }
   });
 
-  gsap.utils.toArray('.sheet ul').forEach(function (ul) {
-    gsap.from(ul.children, {
-      y: 14, opacity: 0, duration: 0.6, stagger: 0.06, ease: 'power3.out',
-      scrollTrigger: { trigger: ul, start: 'top 85%' }
-    });
-  });
-
   // ---------- Footer ----------
   gsap.fromTo('.footer-ghost', { yPercent: 60, scale: 0.8 }, {
     yPercent: 0, scale: 1, ease: 'none',
@@ -621,51 +885,6 @@
     y: 40, opacity: 0, duration: 1, stagger: 0.12, ease: 'power3.out',
     scrollTrigger: { trigger: '.contact', start: 'top 95%' }
   });
-
-  // Paused, reversible gesture for one artwork (tile or its lightbox copy)
-  function artTimeline(svg) {
-    var tl = gsap.timeline({ paused: true, defaults: { duration: 0.7, ease: 'back.out(1.6)' } });
-    var q = function (sel) { return svg.querySelector(sel); };
-    switch (svg.parentNode.getAttribute('data-anim') || svg.getAttribute('data-anim')) {
-      case 'ball':
-        tl.to(q('.a-ball'), { rotation: 90, svgOrigin: '360 150', duration: 0.9 }, 0)
-          .to(q('.a-ball'), { y: -14, duration: 0.35, ease: 'power2.out' }, 0)
-          .to(q('.a-ball'), { y: 0, duration: 0.6, ease: 'bounce.out' }, 0.35)
-          .to(q('.a-bar'), { y: -10, rotation: 2, svgOrigin: '100 280' }, 0.05)
-          .to(q('.a-dots'), { x: -12 }, 0.1);
-        break;
-      case 'fan':
-        tl.to(q('.a-f1'), { x: -20, rotation: -7, svgOrigin: '102 224' }, 0)
-          .to(q('.a-f2'), { y: -16 }, 0.04)
-          .to(q('.a-f3'), { x: 20, rotation: 7, svgOrigin: '378 224' }, 0.08);
-        break;
-      case 'logo':
-        tl.to(q('.a-tri'), { rotation: 120, svgOrigin: '150 124', duration: 0.9 }, 0)
-          .to(q('.a-sun'), { scale: 1.08, svgOrigin: '150 128' }, 0);
-        break;
-      case 'icons':
-        svg.querySelectorAll('.a-ico').forEach(function (g, i) {
-          tl.to(g, { scale: 1.14, rotation: i % 2 ? 8 : -8, svgOrigin: g.getAttribute('data-c'), duration: 0.5, ease: 'back.out(2.4)' }, i * 0.07);
-        });
-        break;
-      case 'print':
-        tl.to(q('.a-page'), { y: -10, duration: 0.6, ease: 'power3.out' }, 0)
-          .to(q('.a-dash'), { scale: 1.05, svgOrigin: '150 150', strokeDashoffset: -39 }, 0);
-        break;
-    }
-    return tl;
-  }
-
-  // Step 3 counts up to 300 dpi while the pixel grain clears (steps 1 and 2 are CSS)
-  function stepFx(svg, step) {
-    if (step === '3') {
-      var dpi = svg.querySelector('.l-dpi');
-      gsap.killTweensOf(dpi.__count || {});
-      var n = dpi.__count = { v: 72 };
-      gsap.to(n, { v: 300, duration: 1.4, ease: 'power2.inOut', onUpdate: function () { dpi.textContent = Math.round(n.v) + ' dpi'; } });
-      gsap.fromTo(svg.querySelector('.l-pix'), { opacity: 0.9 }, { opacity: 0, duration: 1.4, ease: 'power2.inOut', overwrite: true });
-    }
-  }
 
   // Confetti burst in the artwork palette
   function confetti(origin) {
